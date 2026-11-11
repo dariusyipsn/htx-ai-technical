@@ -1,0 +1,58 @@
+{
+  "cases": [
+    {
+      "pdf_path": "data/fy2024_analysis_of_revenue_and_expenditure.pdf",
+      "expected": {
+        "fiscal_year": 2024,
+        "corporate_income_tax_bn": 28.03,
+        "corporate_income_tax_yoy_pct": -1.2,
+        "total_topups_bn": 20.352,
+        "operating_revenue_taxes": [
+          "Corporate Income Tax",
+          "Other Taxes",
+          "Vehicle Quota Premiums",
+          "Personal Income Tax",
+          "Assets Taxes",
+          "Betting Taxes",
+          "Goods and Services Tax"
+        ],
+        "latest_actual_fiscal_position_bn": 1.72
+      }
+    },
+    {
+      "pdf_path": "data/fy2025_analysis_of_revenue_and_expenditure.pdf",
+      "expected": {
+        "fiscal_year": 2025,
+        "corporate_income_tax_bn": 32.67,
+        "corporate_income_tax_yoy_pct": 5.8,
+        "total_topups_bn": 19.6,
+        "operating_revenue_taxes": [
+          "Corporate Income Tax",
+          "Vehicle Quota Premiums",
+          "Goods and Services Tax",
+          "Personal Income Tax",
+          "Stamp Duty",
+          "Fees and Charges (Excluding Vehicle Quota Premiums)"
+        ],
+        "latest_actual_fiscal_position_bn": -2.55
+      }
+    },
+    {
+      "pdf_path": "data/fy2026_analysis_of_revenue_and_expenditure_2026.pdf",
+      "expected": {
+        "fiscal_year": 2026,
+        "corporate_income_tax_bn": 37.77,
+        "corporate_income_tax_yoy_pct": 7.2,
+        "total_topups_bn": 18.9,
+        "operating_revenue_taxes": [
+          "Corporate Income Tax",
+          "Vehicle Quota Premiums",
+          "Other Taxes (Land Betterment Charge and Annual Tonnage Tax)",
+          "Stamp Duty",
+          "Statutory Boards' Contribution"
+        ],
+        "latest_actual_fiscal_position_bn": 6.13
+      }
+    }
+  ]
+}

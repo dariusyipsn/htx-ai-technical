@@ -1,0 +1,10 @@
+llm:
+  provider: google_genai        # google_genai | anthropic | openai | ... (any init_chat_model provider)
+  model: gemini-3.8-flash
+  temperature: 0
+  auto_install: true            # install the provider's langchain package on first use
+  input_cost_per_million: 0.75  # $ per 1M input tokens for this model (logged cost only)
+  output_cost_per_million: 3.75 # $ per 1M output tokens, including thinking tokens
+paths:
+  cache_dir: data/processed
+  output_dir: outputs
