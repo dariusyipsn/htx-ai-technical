@@ -32,7 +32,7 @@
           "Goods and Services Tax",
           "Personal Income Tax",
           "Stamp Duty",
-          "Fees and Charges (Excluding Vehicle Quota Premiums)"
+          "Fees and Charges"
         ],
         "latest_actual_fiscal_position_bn": -2.55
       }
@@ -47,7 +47,7 @@
         "operating_revenue_taxes": [
           "Corporate Income Tax",
           "Vehicle Quota Premiums",
-          "Other Taxes (Land Betterment Charge and Annual Tonnage Tax)",
+          "Other Taxes",
           "Stamp Duty",
           "Statutory Boards' Contribution"
         ],

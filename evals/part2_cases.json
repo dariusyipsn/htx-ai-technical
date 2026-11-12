@@ -1,0 +1,31 @@
+{
+  "cases": [
+    {
+      "pdf_path": "data/fy2024_analysis_of_revenue_and_expenditure.pdf",
+      "reference_date": "2024-01-01",
+      "expected": {
+        "fiscal_year": 2024,
+        "normalized_dates": ["2024-02-16", "2008-02-15"],
+        "statuses": {"2024-02-16": "Upcoming", "2008-02-15": "Expired"}
+      }
+    },
+    {
+      "pdf_path": "data/fy2025_analysis_of_revenue_and_expenditure.pdf",
+      "reference_date": "2024-01-01",
+      "expected": {
+        "fiscal_year": 2025,
+        "normalized_dates": ["2025-02-18", "2008-02-15"],
+        "statuses": {"2025-02-18": "Upcoming", "2008-02-15": "Expired"}
+      }
+    },
+    {
+      "pdf_path": "data/fy2026_analysis_of_revenue_and_expenditure_2026.pdf",
+      "reference_date": "2024-01-01",
+      "expected": {
+        "fiscal_year": 2026,
+        "normalized_dates": ["2026-02-12", "2008-02-15"],
+        "statuses": {"2026-02-12": "Upcoming", "2008-02-15": "Expired"}
+      }
+    }
+  ]
+}

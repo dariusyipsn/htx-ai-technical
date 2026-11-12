@@ -18,7 +18,7 @@ from typing import ClassVar
 from pydantic import BaseModel, Field
 
 from .retrieval import BlockType
-from .schemas import TableValue, TextList
+from .schemas import NormalisedDate, TableValue, TextList
 
 
 class CorporateIncomeTax(BaseModel):
@@ -61,9 +61,11 @@ class OperatingRevenueTaxes(BaseModel):
     operating_revenue_taxes: TextList = Field(
         description="Every revenue line (tax, duty, levy or premium category) that the Operating "
         "Revenue section names as a driver of the change in Operating Revenue, e.g. 'Corporate "
-        "Income Tax' or 'Vehicle Quota Premiums'. Use the names exactly as written and list each "
-        "once. Exclude sub-components mentioned only as part of another line, e.g. 'Foreign "
-        "Worker Levy' (part of 'Other Taxes') or 'Casino Taxes' (part of 'Betting Taxes')."
+        "Income Tax' or 'Vehicle Quota Premiums'. Use the names exactly as written but leave out "
+        "any bracketed text after a name, e.g. 'Other Taxes (Land Betterment Charge and Annual "
+        "Tonnage Tax)' is 'Other Taxes', and list each once. "
+        "Exclude sub-components mentioned only as part of another line, e.g. 'Foreign Worker "
+        "Levy' (part of 'Other Taxes') or 'Casino Taxes' (part of 'Betting Taxes')."
     )
 
 
@@ -81,3 +83,35 @@ class FiscalPosition(BaseModel):
 
 
 PART1_GROUPS: list[type[BaseModel]] = [CorporateIncomeTax, TopUps, OperatingRevenueTaxes, FiscalPosition]
+
+
+# Part 2 groups are not separate extraction calls: their blocks and field descriptions all go
+# into the one date-extraction prompt in `dates.py`, which returns a `NormalisedDate` per field.
+
+
+class DistributionDate(BaseModel):
+    """The date the document was distributed, from the cover page."""
+
+    anchor: ClassVar[str] = "(cover)"
+    block_type: ClassVar[BlockType] = "section"
+
+    distribution_date: NormalisedDate = Field(
+        description="The date the document was distributed, printed on the cover as 'Distributed "
+        "on Budget Day: <date>'. original_text is that whole line, e.g. 'Distributed on Budget "
+        "Day: 16 February 2024'."
+    )
+
+
+class EstateDutyDate(BaseModel):
+    """The date relating to Estate Duty, from the glossary entry for Asset(s) Taxes."""
+
+    anchor: ClassVar[str] = "Asset* Taxes"  # "Assets Taxes" up to FY2025, "Asset Taxes" in FY2026
+    block_type: ClassVar[BlockType] = "section"
+
+    estate_duty_date: NormalisedDate = Field(
+        description="The date in the sentence that says when Estate Duty applies or stops "
+        "applying. original_text is that whole sentence."
+    )
+
+
+PART2_GROUPS: list[type[BaseModel]] = [DistributionDate, EstateDutyDate]

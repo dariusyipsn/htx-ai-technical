@@ -3,7 +3,7 @@
 Numbers pass within `TOLERANCE`; the taxes list passes when it names the same taxes in any
 order (case-insensitive). Results are printed and written to `<output_dir>/evals/part1_eval.json`.
 
-    uv run python evals/part1_eval.py
+    uv run python -m evals.part1_eval
 """
 
 from __future__ import annotations

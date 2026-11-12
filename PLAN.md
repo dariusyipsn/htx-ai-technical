@@ -132,7 +132,7 @@ paths:
    - Every anchor resolves in every year.
 2. `uv run pytest` passes.
 3. `uv run htx-ai-technical part1 --pdf data/fy2024_analysis_of_revenue_and_expenditure.pdf` gives the expected FY2024 values, each with evidence and no `error`, and logs one line per LLM call.
-4. FY2025 and FY2026 expected answers filled into `evals/part1_cases.json`, and `uv run python evals/part1_eval.py` passes every field.
+4. FY2025 and FY2026 expected answers filled into `evals/part1_cases.json`, and `uv run python -m evals.part1_eval` passes every field.
 5. Notebook: `run_part1()` returns an object that matches the JSON output.
 6. Fresh-clone hand-off:
    - only `API_KEY` is exported, and the run succeeds;
@@ -140,3 +140,45 @@ paths:
    - an unknown provider gives a clear error with no install;
    - `auto_install: false` prints the install command;
    - an unset key variable gives a clear error naming it.
+
+---
+
+# Part 3 Plan — Multi-agent supervisor
+
+## Goal
+- Answer "What are the key government revenue streams, and how will the Budget for the Future Energy Fund be supported?" (and other queries) with a supervisor that delegates to a Revenue Agent and an Expenditure Agent.
+- `run_part3(config, pdf_path, query)` is callable from a notebook or the CLI (`part3 --pdf … --query …`), and returns the final answer with a full trace of the supervisor's decisions.
+
+## Design decisions
+- **Hand-built LangGraph `StateGraph`**, not `langgraph-supervisor`. The supervisor is a structured-output call, `Route{reasoning, next, task}`, with `reasoning` first (as in Part 2's `Classification`), so every routing decision is explained in the trace.
+- **Workers are `create_agent` tool loops** returning `AgentReport{answer, figures[Figure{label, value_bn, block_ids, pages}], gaps}`. A worker sees only the supervisor's task. A worker failure is recorded under `gaps`, not raised.
+- **Tools:** `list_blocks`, `search`, `read_block` (plain functions in `retrieval.py`, wrapped as local `@tool`s, shared by both agents) and `sum_values` (Expenditure Agent only: arithmetic in code). Local tools, not MCP, keep `run_part3` synchronous and notebook-friendly.
+- **Keyword search**, not embeddings: about 60 blocks and 15k tokens per document.
+- **Separate synthesis node** writes the final answer from the reports only, citing pages and stating gaps.
+- **Loop guard:** `MAX_AGENT_CALLS = 4`, then the supervisor finishes without an LLM call.
+
+## Graph
+```
+START → supervisor ─┬─▶ revenue ─────┐
+          ▲         ├─▶ expenditure ─┤
+          └─────────┴────────────────┘
+                    └─▶ synthesize → END
+```
+State: `query`, `fiscal_year`, `steps` (appended `SupervisorDecision` / `WorkerRun`), `final_answer`. `steps` is the trace, saved to `outputs/part3_fy<year>_<query-slug>.json` and printed by the CLI.
+
+## Files
+- `supervisor.py` (graph, nodes, tools), `retrieval.py` (lookups), `schemas.py` (Part 3 models), `main.py` (`run_part3`, CLI).
+- `prompts/supervisor.yaml`, `revenue_agent.yaml`, `expenditure_agent.yaml`, `synthesis.yaml`.
+- `evals/part3_cases.json`, `evals/part3_eval.py`: demo queries, scored on routing (set of agents) and key figures (±0.05 $bn).
+- `tests/test_retrieval.py`, `tests/test_supervisor.py`, `tests/test_evals.py`.
+- `pyproject.toml`: `langgraph` as a direct dependency.
+
+## Assumptions
+- "How the FEF is supported" = what the Budget allocates to it, as what and for what (FY2024: $5.0bn initial injection, part of $20.4bn top-ups), plus the revenue that finances the Budget overall. The document earmarks no revenue for the fund, and the answer must say so.
+- "Key revenue streams" = the largest Operating Revenue lines, plus NIRC.
+- One PDF per run; money in $bn.
+
+## Verification
+1. `uv run pytest` passes.
+2. The brief's query on FY2024 routes to both agents and the answer cites the $5.0bn FEF injection (p. 18/20) and the main revenue lines.
+3. `uv run python -m evals.part3_eval` passes routing and figures for every demo query.
