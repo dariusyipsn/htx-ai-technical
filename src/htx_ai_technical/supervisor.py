@@ -24,14 +24,14 @@ import operator
 from typing import Annotated, TypedDict
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool, tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from . import retrieval
-from .dates import tool_trace
+from .dates import AnswerOnLastCall, tool_trace
 from .prompt_loader import chat_prompt
 from .schemas import AgentName, AgentReport, ParsedDocument, Route, SupervisorDecision, WorkerRun
 
@@ -40,10 +40,15 @@ logger = logging.getLogger(__name__)
 # Agent runs allowed per query. After that the supervisor finishes without asking the LLM, so a
 # confused run can't loop.
 MAX_AGENT_CALLS = 4
-# Model calls allowed in one agent run. A normal run takes about 4 (search, read, sum, answer). An
-# agent that hits the cap fails with ModelCallLimitExceededError, which is recorded under its
-# report's gaps.
+# Model calls allowed in one agent run. A normal run takes about 4 (search, read, sum, answer). The
+# last call must write the report from what the agent has read (see `dates.AnswerOnLastCall`).
 MAX_AGENT_MODEL_CALLS = 8
+# Sent with that last call. Asking for what the agent hasn't found yet under gaps lets the
+# supervisor see a report cut short by the cap and follow it up.
+LAST_CALL_NOTE = (
+    "This is your last call and you can't call tools any more. Write your report now from what "
+    "you have read. Under gaps, list anything the task asked for that you haven't found yet."
+)
 
 
 class State(TypedDict):
@@ -82,6 +87,27 @@ def document_tools(doc: ParsedDocument) -> list[BaseTool]:
 def sum_values(values: list[float]) -> str:
     """Add up a list of numbers exactly. Use it for every total; never add in your head."""
     return f"{round(sum(values), 6):g}"
+
+
+def attempted_report(messages: list[BaseMessage]) -> AgentReport:
+    """The report for an agent whose last allowed call gave an invalid report: the answer and gaps
+    it tried to return, without its figures, so the supervisor knows what it found and can follow
+    up for the figures."""
+    attempt = next(
+        (
+            call["args"]
+            for message in reversed(messages)
+            if isinstance(message, AIMessage)
+            for call in message.tool_calls
+            if call["name"] == AgentReport.__name__
+        ),
+        {},
+    )
+    note = (
+        f"Its report after {MAX_AGENT_MODEL_CALLS} model calls was invalid, so its figures were dropped "
+        "and the numbers in its answer have no figures to cite."
+    )
+    return AgentReport(answer=str(attempt.get("answer", "")), figures=[], gaps=f"{note} {attempt.get('gaps', '')}".strip())
 
 
 def render_reports(steps: list[SupervisorDecision | WorkerRun]) -> str:
@@ -136,7 +162,7 @@ def build_graph(llm: BaseChatModel, doc: ParsedDocument) -> CompiledStateGraph:
             llm,
             tools=tools,
             response_format=AgentReport,
-            middleware=[ModelCallLimitMiddleware(run_limit=MAX_AGENT_MODEL_CALLS, exit_behavior="error")],
+            middleware=[AnswerOnLastCall(MAX_AGENT_MODEL_CALLS, note=LAST_CALL_NOTE)],
         )
 
         def run(state: State) -> dict:
@@ -146,7 +172,8 @@ def build_graph(llm: BaseChatModel, doc: ParsedDocument) -> CompiledStateGraph:
                     {"messages": chat_prompt(f"{name}_agent").format_messages(fy=state["fiscal_year"], task=task)},
                     config={"metadata": {"node": name}},  # shown in the LLM call log
                 )
-                report, calls = result["structured_response"], tool_trace(result["messages"], tools)
+                calls = tool_trace(result["messages"], tools)
+                report = result.get("structured_response") or attempted_report(result["messages"])
             except Exception as exc:  # recorded in the trace for the supervisor to work around
                 report, calls = AgentReport(answer="", figures=[], gaps=f"Agent failed: {type(exc).__name__}: {exc}"), []
             return {"steps": [WorkerRun(agent=name, task=task, tool_calls=calls, report=report)]}

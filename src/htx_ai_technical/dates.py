@@ -17,9 +17,10 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import ModelCallLimitMiddleware
+from langchain.agents.middleware import ModelCallLimitMiddleware, ModelRequest
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
@@ -40,9 +41,13 @@ from .schemas import (
 
 # Model calls allowed in one extraction agent run. A normal run takes 2 (call the tool for every
 # date, then answer), so this leaves room for retries. Without the cap, a model that keeps calling
-# tools would loop until `create_agent`'s recursion limit (9,999 graph steps). At the cap the
-# agent stops without an answer.
+# tools would loop until `create_agent`'s recursion limit (9,999 graph steps). The last call
+# must give the answer (see `AnswerOnLastCall`).
 MAX_MODEL_CALLS = 6
+LAST_CALL_NOTE = (
+    "This is your last call and you can't call tools any more. Give your answer now, using the "
+    "tool results you already have."
+)
 
 # The local MCP server (`mcp_server.py`), started as a subprocess that talks over stdio.
 MCP_SERVERS = {
@@ -61,6 +66,32 @@ class DateResults:
     error: str | None = None
 
 
+class AnswerOnLastCall(ModelCallLimitMiddleware):
+    """`ModelCallLimitMiddleware` whose last allowed call must give the structured answer: the
+    tools are taken away, the answer schema is forced, and the model is told it's the last call."""
+
+    def __init__(self, run_limit: int, note: str) -> None:
+        super().__init__(run_limit=run_limit, exit_behavior="end")
+        self.note = note
+
+    def last_call(self, request: ModelRequest) -> ModelRequest:
+        """`request` as is, or made to answer if it is the last allowed call."""
+        if request.state.get("run_model_call_count", 0) < self.run_limit - 1:
+            return request
+        return request.override(
+            tools=[],
+            # A ToolStrategy binds the answer schema as the only tool, with tool_choice="any".
+            response_format=ToolStrategy(request.response_format.schema),
+            messages=[*request.messages, HumanMessage(self.note)],
+        )
+
+    def wrap_model_call(self, request: ModelRequest, handler):
+        return handler(self.last_call(request))
+
+    async def awrap_model_call(self, request: ModelRequest, handler):
+        return await handler(self.last_call(request))
+
+
 def tool_trace(messages: list[BaseMessage], tools: list[BaseTool]) -> list[ToolCallRecord]:
     """The calls to `tools` in an agent's messages, with their outputs. Skips the structured-output
     tool call the agent may use to return its answer."""
@@ -77,12 +108,12 @@ async def extract_dates(
     llm: BaseChatModel, tools: list[BaseTool], fiscal_year: int, definitions: str, context: str
 ) -> tuple[NormalisedDates | None, list[ToolCallRecord]]:
     """Step 1: run the tool-calling agent on `prompts/date_extraction.yaml`. Returns its answer
-    (None if it reached `MAX_MODEL_CALLS` without one) and the tool calls it made."""
+    (None if even its last allowed call gave no valid answer) and the tool calls it made."""
     agent = create_agent(
         llm,
         tools=tools,
         response_format=NormalisedDates,
-        middleware=[ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end")],
+        middleware=[AnswerOnLastCall(MAX_MODEL_CALLS, note=LAST_CALL_NOTE)],
     )
     messages = chat_prompt("date_extraction").format_messages(fy=fiscal_year, definitions=definitions, context=context)
     result = await agent.ainvoke(
@@ -107,8 +138,8 @@ async def find_and_classify_async(
         )
     if normalised is None:
         results.error = (
-            f"The date extraction agent stopped after {MAX_MODEL_CALLS} model calls without returning "
-            "its answer. Its tool calls are in tool_calls."
+            f"The date extraction agent gave no valid answer within {MAX_MODEL_CALLS} model calls, "
+            "including the last one, which had to answer. Its tool calls are in tool_calls."
         )
         return results
     results.normalized = normalised.dates

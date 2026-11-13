@@ -195,7 +195,9 @@ class AgentReport(BaseModel):
 
     answer: str = Field(description="A concise answer to the task, citing pages like (p. 16).")
     figures: list[Figure] = Field(description="Every number the answer relies on.")
-    gaps: str = Field(description="What the task asked for that the document doesn't say. Empty if none.")
+    gaps: str = Field(
+        description="What the task asked for that the document doesn't say, or that you didn't get to. Empty if none."
+    )
 
 
 class SupervisorDecision(BaseModel):

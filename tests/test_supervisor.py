@@ -1,9 +1,17 @@
 from langchain_core.language_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
 
 from htx_ai_technical.schemas import AgentReport, Figure, ParsedDocument, SupervisorDecision, WorkerRun
-from htx_ai_technical.supervisor import MAX_AGENT_CALLS, build_graph, next_node, render_reports, sum_values
+from htx_ai_technical.supervisor import (
+    MAX_AGENT_CALLS,
+    MAX_AGENT_MODEL_CALLS,
+    attempted_report,
+    build_graph,
+    next_node,
+    render_reports,
+    sum_values,
+)
 
 
 def decision(next_: str) -> SupervisorDecision:
@@ -56,3 +64,20 @@ def test_supervisor_finishes_without_an_llm_call_at_the_agent_call_limit():
         reasoning=f"Reached the limit of {MAX_AGENT_CALLS} agent calls.", next="finish", task=""
     )
     assert state["final_answer"] == "final answer"
+
+
+def test_attempted_report_keeps_the_answer_and_gaps_but_not_the_figures():
+    invalid = {"answer": "$5.0bn (p. 20)", "figures": [{"label": "FEF top-up", "value_bn": "five"}], "gaps": "No FY2025 figure."}
+    messages = [
+        HumanMessage("Find the FEF top-up"),
+        AIMessage("", tool_calls=[{"name": "AgentReport", "args": invalid, "id": "a"}]),
+        ToolMessage("Error: value_bn is not a number", name="AgentReport", tool_call_id="a"),
+        AIMessage(f"Model call limits exceeded: run limit ({MAX_AGENT_MODEL_CALLS}/{MAX_AGENT_MODEL_CALLS})"),
+    ]
+    report = attempted_report(messages)
+    assert (report.answer, report.figures) == ("$5.0bn (p. 20)", [])
+    assert report.gaps.endswith("have no figures to cite. No FY2025 figure.")
+
+
+def test_attempted_report_without_an_attempt():
+    assert attempted_report([HumanMessage("Find the FEF top-up")]).answer == ""
