@@ -1,6 +1,6 @@
 import pytest
 
-from htx_ai_technical.retrieval import anchor_matcher, locate
+from htx_ai_technical.retrieval import anchor_matcher, list_blocks, locate, read_blocks, search
 from htx_ai_technical.schemas import Block, ParsedDocument
 
 
@@ -46,3 +46,53 @@ def test_locate_filters_by_block_type():
 
 def test_locate_only_matches_the_documents_fiscal_year():
     assert locate(DOC, "Top-ups * in FY{fy}", "table") == []
+
+
+LOOKUP_DOC = ParsedDocument(
+    source="fake.pdf",
+    fiscal_year=2030,
+    blocks=[
+        Block(id="s0", type="section", title="Operating Revenue", pages=[5], text="Tax collections rose. Fund top-ups fell."),
+        Block(
+            id="s1",
+            type="section",
+            title="Top-ups to Funds",
+            pages=[18],
+            text="The Government will top up several funds. It will establish the Future Energy Fund with $5.0 billion.",
+        ),
+        Block(id="t2", type="table", title="Top-ups to Funds in FY2030", pages=[20], text="| Future Energy Fund | 5,000 |"),
+    ],
+)
+
+
+def test_list_blocks_shows_every_block():
+    lines = list_blocks(LOOKUP_DOC).splitlines()
+    assert lines == [b.describe() for b in LOOKUP_DOC.blocks]
+
+
+def test_read_blocks_returns_each_block_in_the_order_asked():
+    assert read_blocks(LOOKUP_DOC, ["t2", "s0"]) == (
+        "[t2] TABLE: Top-ups to Funds in FY2030 (pages 20)\n| Future Energy Fund | 5,000 |\n\n"
+        "[s0] SECTION: Operating Revenue (pages 5)\nTax collections rose. Fund top-ups fell."
+    )
+
+
+def test_read_blocks_notes_unknown_ids_and_still_returns_the_rest():
+    out = read_blocks(LOOKUP_DOC, ["x9", "t2"]).split("\n\n")
+    assert out[0] == "[x9] No block with this id. Use list_blocks to see the ids."
+    assert out[1].startswith("[t2] TABLE")
+
+
+def test_read_blocks_needs_an_id():
+    with pytest.raises(ValueError, match="at least one block id"):
+        read_blocks(LOOKUP_DOC, [])
+
+
+def test_search_ranks_by_keywords_matched_and_quotes_the_best_line():
+    hits = search(LOOKUP_DOC, "Future Energy Fund").splitlines()
+    assert [h.split("]")[0] for h in hits[::2]] == ["[s1", "[t2", "[s0"]  # s0 only has "Fund"
+    assert hits[1].strip() == "It will establish the Future Energy Fund with $5.0 billion."
+
+
+def test_search_without_matches():
+    assert search(LOOKUP_DOC, "defence") == "No block mentions 'defence'."

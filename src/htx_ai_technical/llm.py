@@ -10,6 +10,7 @@ LangChain package is installed on first use (from an allowlist), unless
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import os
 import shutil
 import subprocess
@@ -61,11 +62,17 @@ PROVIDER_PACKAGES: dict[str, tuple[str, bool]] = {
 
 
 def _install(package: str) -> None:
+    """Install the provider package, holding langchain-core at its installed (locked) version.
+
+    Without the pin, the resolver may upgrade langchain-core for the provider's latest release;
+    the next `uv run` then syncs it back to the lockfile, breaking the provider's import.
+    """
+    packages = [package, f"langchain-core=={importlib.metadata.version('langchain-core')}"]
     uv = shutil.which("uv")
     cmd = (
-        [uv, "pip", "install", "--python", sys.executable, package]
+        [uv, "pip", "install", "--python", sys.executable, *packages]
         if uv
-        else [sys.executable, "-m", "pip", "install", package]
+        else [sys.executable, "-m", "pip", "install", *packages]
     )
     print(f"[llm] Installing {package} for this provider: {' '.join(cmd)}", file=sys.stderr)
     subprocess.run(cmd, check=True)

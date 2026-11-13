@@ -48,7 +48,7 @@ class Config(BaseModel):
 def find_repo_root() -> Path:
     """Walk up from the cwd to the folder holding pyproject.toml and config.yaml.
 
-    Falls back to the package's own repo, so notebooks in any subfolder work.
+    Falls back to the package's own repo when the cwd is outside it.
     """
     for candidate in [Path.cwd(), Path(__file__).resolve()]:
         for parent in [candidate, *candidate.parents]:

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
@@ -37,6 +38,11 @@ from .schemas import (
     ToolCallRecord,
 )
 
+# A normal run takes 2 model calls (call the tool for every date, then answer); this leaves room
+# for one retry per date. A model that keeps calling tools would otherwise loop for thousands of
+# steps (LangGraph's default recursion limit); at the cap the agent stops without an answer.
+MAX_MODEL_CALLS = 6
+
 MCP_SERVERS = {
     "dates": {"command": sys.executable, "args": ["-m", "htx_ai_technical.mcp_server"], "transport": "stdio"},
 }
@@ -47,6 +53,7 @@ class DateResults:
     normalized: list[NormalisedDate] = field(default_factory=list)
     dates: list[DateStatus] = field(default_factory=list)
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
+    error: str | None = None
 
 
 def tool_trace(messages: list[BaseMessage], tools: list[BaseTool]) -> list[ToolCallRecord]:
@@ -63,15 +70,20 @@ def tool_trace(messages: list[BaseMessage], tools: list[BaseTool]) -> list[ToolC
 
 async def run_agent(
     llm: BaseChatModel, tools: list[BaseTool], prompt_name: str, schema: type[BaseModel], **variables: str
-) -> tuple[BaseModel, list[ToolCallRecord]]:
+) -> tuple[BaseModel | None, list[ToolCallRecord]]:
     """Run a tool-calling agent on `prompts/<prompt_name>.yaml` and return its structured answer
-    and the tool calls it made."""
-    agent = create_agent(llm, tools=tools, response_format=schema)
+    (None if it reached `MAX_MODEL_CALLS` without one) and the tool calls it made."""
+    agent = create_agent(
+        llm,
+        tools=tools,
+        response_format=schema,
+        middleware=[ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end")],
+    )
     result = await agent.ainvoke(
         {"messages": chat_prompt(prompt_name).format_messages(**variables)},
         config={"metadata": {"step": prompt_name}},  # shown in the LLM call log
     )
-    return result["structured_response"], tool_trace(result["messages"], tools)
+    return result.get("structured_response"), tool_trace(result["messages"], tools)
 
 
 async def find_and_classify_async(
@@ -89,7 +101,14 @@ async def find_and_classify_async(
             definitions="\n".join(definitions(g) for g in blocks),
             context="\n\n".join(render_block(b) for b in blocks.values()),
         )
-    results.normalized, results.tool_calls = normalised.dates, calls
+    results.tool_calls = calls
+    if normalised is None:
+        results.error = (
+            f"The date extraction agent stopped after {MAX_MODEL_CALLS} model calls without returning "
+            "its answer. Its tool calls are in tool_calls."
+        )
+        return results
+    results.normalized = normalised.dates
     if not results.normalized:
         return results
 
@@ -116,8 +135,7 @@ async def find_and_classify_async(
 def find_and_classify(
     llm: BaseChatModel, blocks: dict[type[BaseModel], Block], fiscal_year: int, reference_date: date
 ) -> DateResults:
-    """Synchronous wrapper for the CLI. The MCP client is async; `asyncio.run` fails where an event
-    loop is already running (e.g. Jupyter), so await `find_and_classify_async` there instead."""
+    """Synchronous wrapper for the CLI: the MCP client is async, so this runs it with `asyncio.run`."""
     return asyncio.run(find_and_classify_async(llm, blocks, fiscal_year, reference_date))
 
 

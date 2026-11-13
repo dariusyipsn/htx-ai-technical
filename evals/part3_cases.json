@@ -1,0 +1,59 @@
+{
+  "cases": [
+    {
+      "pdf_path": "data/fy2024_analysis_of_revenue_and_expenditure.pdf",
+      "query": "What are the key government revenue streams, and how will the Budget for the Future Energy Fund be supported?",
+      "expected": {"agents": ["revenue", "expenditure"], "figures": [5.0]}
+    },
+    {
+      "pdf_path": "data/fy2024_analysis_of_revenue_and_expenditure.pdf",
+      "query": "What do the FY2024 top-ups to endowment and trust funds add up to, and which fund receives the most?",
+      "expected": {"agents": ["expenditure"], "figures": [20.352, 6.0]}
+    },
+    {
+      "pdf_path": "data/fy2024_analysis_of_revenue_and_expenditure.pdf",
+      "query": "Is FY2024 Operating Revenue enough to cover Total Expenditure, and what closes the gap?",
+      "expected": {"agents": ["revenue", "expenditure"], "figures": [23.5]}
+    },
+    {
+      "pdf_path": "data/fy2026_analysis_of_revenue_and_expenditure_2026.pdf",
+      "query": "How much has the Government put into the Future Energy Fund in each year shown, and in total?",
+      "expected": {"agents": ["expenditure"], "figures": [10.0]}
+    },
+    {
+      "pdf_path": "data/fy2025_analysis_of_revenue_and_expenditure.pdf",
+      "query": "Which ministries are expected to see the biggest increases in expenditure in FY2025, and why?",
+      "expected": {"agents": ["expenditure"], "figures": [2.9, 2.6]}
+    },
+    {
+      "pdf_path": "data/fy2025_analysis_of_revenue_and_expenditure.pdf",
+      "query": "Which tax collections are expected to grow the most in FY2025, and what is driving them?",
+      "expected": {"agents": ["revenue"], "figures": [1.8, 1.3]}
+    },
+    {
+      "pdf_path": "data/fy2026_analysis_of_revenue_and_expenditure_2026.pdf",
+      "query": "Why is Development Expenditure expected to rise so sharply in FY2026, and which ministry drives most of it?",
+      "expected": {"agents": ["expenditure"], "figures": [7.06, 4.32]}
+    },
+    {
+      "pdf_path": "data/fy2026_analysis_of_revenue_and_expenditure_2026.pdf",
+      "query": "Which revenue streams are expected to fall in FY2026, and by how much?",
+      "expected": {"agents": ["revenue"], "figures": [2.35]}
+    },
+    {
+      "pdf_path": "data/fy2026_analysis_of_revenue_and_expenditure_2026.pdf",
+      "query": "Why did the Revised FY2025 overall fiscal surplus turn out larger than estimated?",
+      "expected": {"agents": ["revenue", "expenditure"], "figures": [15.10, 8.08]}
+    },
+    {
+      "pdf_path": "data/fy2024_analysis_of_revenue_and_expenditure.pdf",
+      "query": "What is the defence budget for FY2030?",
+      "expected": {"agents": ["expenditure"], "figures": []}
+    },
+    {
+      "pdf_path": "data/fy2024_analysis_of_revenue_and_expenditure.pdf",
+      "query": "Who won the 2022 FIFA World Cup?",
+      "expected": {"agents": [], "figures": []}
+    }
+  ]
+}

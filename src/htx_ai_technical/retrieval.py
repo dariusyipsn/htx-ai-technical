@@ -33,3 +33,51 @@ def locate(doc: ParsedDocument, pattern: str, block_type: BlockType) -> list[Blo
 
 def render_block(block: Block) -> str:
     return f"{block.describe()}\n{block.text}"
+
+
+# ---------------------------------------------------------------------------
+# Lookups for the Part 3 agents (wrapped as tools in `supervisor.py`)
+# ---------------------------------------------------------------------------
+
+_WORD = re.compile(r"[a-z0-9]+")
+_SENTENCE_OR_LINE = re.compile(r"\n|(?<=\.)\s+")
+SEARCH_RESULTS = 5
+
+
+def list_blocks(doc: ParsedDocument) -> str:
+    """The document's table of contents: one line per block with its id, type, title and pages."""
+    return "\n".join(b.describe() for b in doc.blocks)
+
+
+def read_blocks(doc: ParsedDocument, block_ids: list[str]) -> str:
+    """The full text of each block (a table as markdown), headed by its description, in the order
+    asked. An unknown id gets a note in its place, so the other blocks are still returned."""
+    if not block_ids:
+        raise ValueError("Give at least one block id.")
+    return "\n\n".join(
+        render_block(block) if (block := doc.blocks_by_id.get(i)) else f"[{i}] No block with this id. Use list_blocks to see the ids."
+        for i in block_ids
+    )
+
+
+def search(doc: ParsedDocument, keywords: str) -> str:
+    """The `SEARCH_RESULTS` blocks that best match `keywords`, each with its best-matching sentence
+    or table row. Blocks are ranked by how many of the keywords they contain, then by how often
+    (a keyword in the title counts three times)."""
+    terms = set(_WORD.findall(keywords.lower()))
+    if not terms:
+        raise ValueError("Give at least one keyword.")
+
+    def score(title: str, text: str) -> tuple[int, int]:
+        title_words, text_words = _WORD.findall(title.lower()), _WORD.findall(text.lower())
+        found = terms & {*title_words, *text_words}
+        return len(found), sum(3 * (w in terms) for w in title_words) + sum(w in terms for w in text_words)
+
+    ranked = sorted(doc.blocks, key=lambda b: score(b.title, b.text), reverse=True)
+    lines = []
+    for b in ranked[:SEARCH_RESULTS]:
+        if score(b.title, b.text)[0] == 0:
+            break
+        best = max(_SENTENCE_OR_LINE.split(b.text), key=lambda part: score("", part))
+        lines.append(f"{b.describe()}\n    {best[:300]}")
+    return "\n".join(lines) or f"No block mentions {keywords!r}."

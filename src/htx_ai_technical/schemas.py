@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import cached_property
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -33,6 +34,11 @@ class ParsedDocument(BaseModel):
     source: str
     fiscal_year: int | None
     blocks: list[Block]
+
+    @cached_property
+    def blocks_by_id(self) -> dict[str, Block]:
+        """Blocks keyed by id, built on first use. Not a field, so it isn't saved in the parse cache."""
+        return {b.id: b for b in self.blocks}
 
 
 # ---------------------------------------------------------------------------
@@ -82,3 +88,120 @@ class Part1Result(BaseModel):
     operating_revenue_taxes: list[str] = Field(default_factory=list)
     latest_actual_fiscal_position_bn: float | None = None
     provenance: dict[str, Provenance] = Field(default_factory=dict)
+
+
+class NormalisedDate(BaseModel):
+    """Step 1 output: a date found in the excerpts, normalised with the MCP tool."""
+
+    id: str = Field(description="The date's name, exactly as listed under 'Dates to find'.")
+    original_text: str = Field(description="The full sentence or line containing the date, copied verbatim.")
+    normalized_date: str = Field(description="The normalisation tool's output for this date, copied exactly.")
+
+
+class NormalisedDates(BaseModel):
+    dates: list[NormalisedDate] = Field(description="One item per date found and normalised.")
+
+
+class Classification(BaseModel):
+    """Step 2 output: a normalised date classified by the LLM. `reasoning` comes before `status`
+    so the model reasons before it answers."""
+
+    id: str = Field(description="The date's id, exactly as given.")
+    reasoning: str = Field(
+        description="One or two sentences: the subject, what the date marks for it (event, start or "
+        "end of a period) and how it compares with the reference date."
+    )
+    status: Literal["Expired", "Upcoming", "Ongoing"]
+
+
+class Classifications(BaseModel):
+    dates: list[Classification] = Field(description="One item per date given.")
+
+
+class DateStatus(BaseModel):
+    id: str
+    original_text: str
+    normalized_date: str
+    status: Literal["Expired", "Upcoming", "Ongoing"]
+    reasoning: str
+
+
+class ToolCallRecord(BaseModel):
+    """One MCP tool call made by the LLM, for the trace."""
+
+    tool: str
+    args: dict
+    output: str
+
+
+class Part2Result(BaseModel):
+    source_pdf: str
+    fiscal_year: int
+    reference_date: str
+    normalized_dates: list[str] = Field(default_factory=list)
+    dates: list[DateStatus] = Field(default_factory=list)
+    tool_calls: list[ToolCallRecord] = Field(default_factory=list)
+    provenance: dict[str, Provenance] = Field(default_factory=dict)
+    error: str | None = None  # the extraction agent gave no answer
+
+
+# ---------------------------------------------------------------------------
+# Part 3: multi-agent supervisor
+# ---------------------------------------------------------------------------
+
+AgentName = Literal["revenue", "expenditure"]
+
+
+class Route(BaseModel):
+    """The supervisor's decision. `reasoning` comes before `next` so it reasons before it routes."""
+
+    reasoning: str = Field(
+        description="Two or three sentences: what the query still needs, given the reports so far, "
+        "and which agent (if any) can supply it."
+    )
+    next: Literal["revenue", "expenditure", "finish"] = Field(
+        description="The agent to call next, or 'finish' when the reports cover the query, the reports "
+        "say the document doesn't have what's left, or the query is off-topic."
+    )
+    task: str = Field(
+        description="When calling an agent: a self-contained instruction saying exactly what to find, "
+        "for which fiscal year(s). The agent sees only this, not the query or other reports. Empty when finishing."
+    )
+
+
+class Figure(BaseModel):
+    """A number an agent read (or summed) from the document, with where it came from."""
+
+    label: str = Field(description="What the number is, e.g. 'Corporate Income Tax, Estimated FY2024'.")
+    value_bn: float = Field(description="The value in $ billions ($ million figures divided by 1,000).")
+    block_ids: list[str] = Field(description="Id(s) of the block(s) it was read from, e.g. ['t026'].")
+    pages: list[int] = Field(description="Page(s) of those blocks.")
+
+
+class AgentReport(BaseModel):
+    answer: str = Field(description="A concise answer to the task, citing pages like (p. 16).")
+    figures: list[Figure] = Field(description="Every number the answer relies on.")
+    gaps: str = Field(description="What the task asked for that the document doesn't say. Empty if none.")
+
+
+class SupervisorDecision(BaseModel):
+    kind: Literal["decision"] = "decision"
+    reasoning: str
+    next: Literal["revenue", "expenditure", "finish"]
+    task: str
+
+
+class WorkerRun(BaseModel):
+    kind: Literal["worker"] = "worker"
+    agent: AgentName
+    task: str
+    tool_calls: list[ToolCallRecord] = Field(default_factory=list)
+    report: AgentReport
+
+
+class Part3Result(BaseModel):
+    source_pdf: str
+    fiscal_year: int
+    query: str
+    steps: list[SupervisorDecision | WorkerRun] = Field(default_factory=list)
+    final_answer: str
