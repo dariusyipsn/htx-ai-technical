@@ -12,18 +12,17 @@ from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.runnables import Runnable, RunnableLambda
+from langchain_core.runnables import RunnableLambda
 from pydantic import BaseModel
 
 from .prompt_loader import chat_prompt
 from .retrieval import locate, render_block
 from .schemas import Block, ParsedDocument, Provenance
 
-PROMPT_NAME = "extraction"
-
-
 @dataclass
 class GroupResult:
+    """One field group, its source block and the LLM output for it, or why there is none."""
+
     group: type[BaseModel]
     block: Block | None
     output: BaseModel | None = None
@@ -41,46 +40,32 @@ def definitions(group: type[BaseModel]) -> str:
     return "\n".join(f"- {name}: {info.description}" for name, info in group.model_fields.items())
 
 
-def build_chain(llm: BaseChatModel, schema: type[BaseModel]) -> Runnable:
-    return chat_prompt(PROMPT_NAME) | llm.with_structured_output(schema)
-
-
-def extract(
-    doc: ParsedDocument,
-    groups: list[type[BaseModel]],
-    llm: BaseChatModel,
-    fiscal_year: int,
-) -> dict[str, GroupResult]:
+def extract(doc: ParsedDocument, groups: list[type[BaseModel]], llm: BaseChatModel) -> list[GroupResult]:
     """Run one LLM call per field group, in parallel. Failures are recorded, not raised."""
-    located = {g.__name__: GroupResult(g, locate_block(doc, g)) for g in groups}
+    results = [GroupResult(g, locate_block(doc, g)) for g in groups]
 
     def run(result: GroupResult) -> BaseModel:
-        chain = build_chain(llm, result.group)
+        chain = chat_prompt("extraction") | llm.with_structured_output(result.group)
         return chain.invoke(
             {
-                "fy": fiscal_year,
+                "fy": doc.fiscal_year,
                 "definitions": definitions(result.group),
                 "context": render_block(result.block),
             },
             config={"metadata": {"field_group": result.group.__name__}},  # shown in the LLM call log
         )
 
-    todo = [r for r in located.values() if r.block]
-    outputs = RunnableLambda(run).batch(todo, return_exceptions=True)
-    for result, output in zip(todo, outputs):
+    located = [r for r in results if r.block]
+    outputs = RunnableLambda(run).batch(located, return_exceptions=True)
+    for result, output in zip(located, outputs):
         if isinstance(output, Exception):
             result.error = f"{type(output).__name__}: {output}"
         else:
             result.output = output
-    for result in located.values():
+    for result in results:
         if not result.block:
             result.error = "No source block found (no anchor match)."
-    return located
-
-
-# ---------------------------------------------------------------------------
-# Provenance for any group output
-# ---------------------------------------------------------------------------
+    return results
 
 
 def field_answers(result: GroupResult) -> dict[str, tuple[Any, Provenance]]:
@@ -96,8 +81,7 @@ def field_answers(result: GroupResult) -> dict[str, tuple[Any, Provenance]]:
             prov.error = result.error or "No output for this field."
             out[name] = (None, prov)
             continue
-
-        prov.row = getattr(answer, "row_label", None)
+        prov.row = getattr(answer, "row_label", None)  # only a TableValue has row and column labels
         prov.column = getattr(answer, "column_label", None)
         prov.evidence = answer.evidence
         out[name] = (answer.value, prov)

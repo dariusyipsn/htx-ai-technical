@@ -2,9 +2,10 @@
 
 `get_llm` is the only place the code reaches a model. It goes through LangChain's
 `init_chat_model`, so switching provider is a config change. The API key comes only from
-the `API_KEY` environment variable, whatever the provider, never from config. A non-default provider's
-LangChain package is installed on first use (from an allowlist), unless
-`llm.auto_install` is false. Every call through the model is logged (see `llm_logging`).
+the `API_KEY` environment variable, whatever the provider, never from config. No provider
+package ships with the project: the configured provider's LangChain package is installed on
+first use (from an allowlist), unless `llm.auto_install` is false. Every call through the model
+is logged (see `llm_logging`).
 """
 
 from __future__ import annotations
@@ -22,10 +23,11 @@ from langchain_core.language_models import BaseChatModel
 from .config import ConfigError, LLMConfig
 from .llm_logging import LLMCallLogger
 
+# The one environment variable the API key is read from, whatever the provider.
 API_KEY_ENV = "API_KEY"
 
-# provider -> (pip package, whether it needs an API key). Mirrors init_chat_model's
-# supported providers. Keyless providers authenticate another way: a local server
+# The allowlist of providers: provider -> (pip package, whether it needs an API key). Mirrors
+# init_chat_model's supported providers. Keyless providers authenticate another way: a local server
 # (ollama) or cloud credentials (Vertex AI via gcloud, Bedrock via AWS).
 PROVIDER_PACKAGES: dict[str, tuple[str, bool]] = {
     "openai": ("langchain-openai", True),
@@ -90,7 +92,8 @@ def _api_key(provider: str, needs_key: bool) -> str | None:
 
 
 def get_llm(llm_config: LLMConfig) -> BaseChatModel:
-    """Build the chat model from the `llm` section of config."""
+    """Build the chat model from the `llm` section of config, installing the provider package
+    if it is missing."""
     if llm_config.provider not in PROVIDER_PACKAGES:
         valid = ", ".join(sorted(PROVIDER_PACKAGES))
         raise ConfigError(f"Unknown provider {llm_config.provider!r} in llm.provider. Valid providers: {valid}.")

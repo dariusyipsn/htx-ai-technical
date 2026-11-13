@@ -17,17 +17,22 @@ from docling_core.types.doc import ContentLayer, DocItem, DocItemLabel, DoclingD
 
 from .schemas import Block, ParsedDocument
 
-#skips page headers, footers, picture, table of contents
+# Items left out of the blocks: page headers and footers, pictures and the table of contents.
 _SKIP = {DocItemLabel.PAGE_HEADER, DocItemLabel.PAGE_FOOTER, DocItemLabel.PICTURE, DocItemLabel.DOCUMENT_INDEX}
-#looks out for table numbers
+# A table's number on a line of its own, e.g. "Table 2.1" or "Table 3.1a:".
 _TABLE_LABEL = re.compile(r"^Table\s+\d+(\.\d+)?[a-z]?:?$", re.IGNORECASE)
+# A chapter heading, e.g. "01 Update on ...".
 _CHAPTER = re.compile(r"^\d{2}\s+\S")
+# A numbered section heading, e.g. "1.2 Operating Revenue"; group 1 is the number.
 _NUMBERED = re.compile(r"^(\d+(?:\.\d+)+)\s+\S")
+# The fiscal year on the cover, e.g. "Financial Year 2024".
 _FISCAL_YEAR = re.compile(r"Financial\s+Year\s+(\d{4})", re.IGNORECASE)
+# Level of an unnumbered heading: below a chapter (1) and a section like "1.2" (2).
 _SUBHEADING = 3
 
 
 def heading_level(text: str) -> int:
+    """1 for a chapter, 2 for "1.2 ...", 3 for "1.2.3 ..." or an unnumbered sub-heading."""
     if _CHAPTER.match(text) or not re.search(r"[a-z]", text):  # "01 Update ..." or ALL CAPS
         return 1
     if m := _NUMBERED.match(text):
@@ -40,11 +45,12 @@ def _pages(item: DocItem) -> list[int]:
 
 
 def _clean(text: str) -> str:
-    """Removes redunant spacing and literal 'BLANK' string."""
+    """Collapse whitespace and drop the literal "BLANK" that the PDFs print in empty cells."""
     return " ".join(text.replace("BLANK", " ").split())
 
 
 def _is_note(item: DocItem, text: str) -> bool:
+    """A table's footnote: "Note: ...", "Source: ..." or a line starting with a footnote number."""
     return item.label == DocItemLabel.FOOTNOTE or bool(re.match(r"^(Note|Source)s?\b|^\d+\s", text))
 
 
@@ -57,11 +63,12 @@ def table_grid(table: TableItem) -> tuple[list[list[str]], int]:
             break
         header_rows += 1
     keep = [i for i, row in enumerate(grid) if any(row)]  # drop all-empty rows
-    header_rows = sum(1 for i in keep if i < header_rows)
+    header_rows = sum(i < header_rows for i in keep)  # recount: some header rows may have been dropped
     return [grid[i] for i in keep], header_rows
 
 
 def grid_to_markdown(grid: list[list[str]], header_rows: int) -> str:
+    """A markdown table. Stacked header rows are joined into one header per column."""
     if not grid:
         return ""
     width = max(len(r) for r in grid)
@@ -74,6 +81,8 @@ def grid_to_markdown(grid: list[list[str]], header_rows: int) -> str:
 
 @dataclass
 class _Builder:
+    """Groups Docling items, fed in reading order, into section and table blocks."""
+
     blocks: list[Block] = field(default_factory=list)
     stack: list[tuple[int, str]] = field(default_factory=list)  # open headings (level, title)
     section: Block | None = None  # section being filled
@@ -205,10 +214,11 @@ def detect_fiscal_year(first_page: str) -> int | None:
 
 
 def convert_pdf(pdf_path: Path) -> DoclingDocument:
+    # Imported here because Docling is slow to import and a cached run doesn't need it.
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode, TableStructureOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
-    
+
     table_options = TableStructureOptions(mode=TableFormerMode.ACCURATE, do_cell_matching=True)
     options = PdfPipelineOptions(
         do_ocr=False,  # MOF PDFs are born-digital
@@ -219,13 +229,12 @@ def convert_pdf(pdf_path: Path) -> DoclingDocument:
     return converter.convert(pdf_path).document
 
 
-def load_document(pdf_path: str | Path, cache_dir: str | Path) -> ParsedDocument:
+def load_document(pdf_path: Path, cache_dir: Path) -> ParsedDocument:
     """Parse `pdf_path` into blocks, reusing `<cache_dir>/<pdf-name>.json` whenever it exists.
     Delete that file to re-parse."""
-    pdf_path = Path(pdf_path)
     if not pdf_path.is_file():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
-    cache = Path(cache_dir) / f"{pdf_path.stem}.json"
+    cache = cache_dir / f"{pdf_path.stem}.json"
     if cache.is_file():
         return ParsedDocument.model_validate_json(cache.read_text())
 
@@ -233,7 +242,7 @@ def load_document(pdf_path: str | Path, cache_dir: str | Path) -> ParsedDocument
     cover = cover_block(docling_doc)
     blocks = [cover, *build_blocks(docling_doc)]
     for i, b in enumerate(blocks):
-        b.id = f"{b.type[0]}{i:03d}"
+        b.id = f"{b.type[0]}{i:03d}"  # e.g. "s000" for the cover, "t026" for a table
     parsed = ParsedDocument(source=pdf_path.name, fiscal_year=detect_fiscal_year(cover.text), blocks=blocks)
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(parsed.model_dump_json(indent=1))

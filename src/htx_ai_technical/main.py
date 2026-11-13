@@ -1,5 +1,4 @@
-"""Entry points. Each part has a `run_partN()` and a CLI choice; `run_part2` is CLI only (see
-`dates.find_and_classify`)."""
+"""Entry points: a `run_partN()` for each part, and the CLI that calls them."""
 
 from __future__ import annotations
 
@@ -8,7 +7,6 @@ import json
 import logging
 import re
 import sys
-from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -18,41 +16,42 @@ from .extraction import extract, field_answers, locate_block
 from .fields import PART1_GROUPS, PART2_GROUPS
 from .llm import get_llm
 from .parsing import load_document
-from .schemas import ParsedDocument, Part1Result, Part2Result, Part3Result, WorkerRun
+from pydantic import BaseModel
+
+from .schemas import ParsedDocument, Part1Result, Part2Result, Part3Result, Provenance, WorkerRun
 from .supervisor import build_graph
 
-@dataclass
-class Context:
-    """What every part starts from: the parsed document and its fiscal year."""
 
-    doc: ParsedDocument
-    fiscal_year: int
-
-
-def prepare(config: Config, pdf_path: Path) -> Context:
-    """Load the (cached) parsed document at `pdf_path`. The fiscal year is detected from the PDF."""
+def prepare(config: Config, pdf_path: Path) -> ParsedDocument:
+    """What every part starts from: the (cached) parsed document at `pdf_path`, with the fiscal
+    year detected from its cover."""
     doc = load_document(pdf_path, config.cache_dir)
     if doc.fiscal_year is None:
         raise ConfigError(f"Could not detect the fiscal year of {pdf_path.name} from its first page.")
-    return Context(doc, doc.fiscal_year)
+    return doc
+
+
+def save(config: Config, filename: str, result: BaseModel) -> None:
+    """Write `result` as JSON to `<output_dir>/<filename>`."""
+    out = config.output_dir / filename
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(result.model_dump_json(indent=2))
 
 
 def run_part1(config: Config, pdf_path: Path) -> Part1Result:
     """Extract the Part 1 fields from `pdf_path` and write them, with provenance, to `outputs/part1_fy<year>.json`."""
     llm = get_llm(config.llm)  # fail fast on key/provider errors, before parsing
-    ctx = prepare(config, pdf_path)
+    doc = prepare(config, pdf_path)
 
     values, provenance = {}, {}
-    for group_result in extract(ctx.doc, PART1_GROUPS, llm, ctx.fiscal_year).values():
+    for group_result in extract(doc, PART1_GROUPS, llm):
         for name, (value, prov) in field_answers(group_result).items():
             values[name], provenance[name] = value, prov
-    if values.get("operating_revenue_taxes") is None:
+    if values["operating_revenue_taxes"] is None:  # the one field that is a list, not nullable
         values["operating_revenue_taxes"] = []
 
-    result = Part1Result(source_pdf=ctx.doc.source, fiscal_year=ctx.fiscal_year, **values, provenance=provenance)
-    out = config.output_dir / f"part1_fy{ctx.fiscal_year}.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(result.model_dump_json(indent=2))
+    result = Part1Result(source_pdf=doc.source, fiscal_year=doc.fiscal_year, **values, provenance=provenance)
+    save(config, part1_output_name(result), result)
     return result
 
 
@@ -60,15 +59,15 @@ def run_part2(config: Config, pdf_path: Path, reference_date: date) -> Part2Resu
     """Find the distribution and estate duty dates in `pdf_path`, normalise them and classify them
     against `reference_date` with the local MCP tools, and write `outputs/part2_<pdf-name>_ref<reference-date>.json`."""
     llm = get_llm(config.llm)
-    ctx = prepare(config, pdf_path)
+    doc = prepare(config, pdf_path)
 
-    blocks = {g: locate_block(ctx.doc, g) for g in PART2_GROUPS}
+    blocks = {g: locate_block(doc, g) for g in PART2_GROUPS}
     found = {g: b for g, b in blocks.items() if b}
-    results = find_and_classify(llm, found, ctx.fiscal_year, reference_date) if found else DateResults()
+    results = find_and_classify(llm, found, doc.fiscal_year, reference_date) if found else DateResults()
 
     result = Part2Result(
-        source_pdf=ctx.doc.source,
-        fiscal_year=ctx.fiscal_year,
+        source_pdf=doc.source,
+        fiscal_year=doc.fiscal_year,
         reference_date=reference_date.isoformat(),
         normalized_dates=[d.normalized_date for d in results.normalized],
         dates=results.dates,
@@ -76,9 +75,7 @@ def run_part2(config: Config, pdf_path: Path, reference_date: date) -> Part2Resu
         provenance=date_provenance(blocks, results.normalized),
         error=results.error,
     )
-    out = config.output_dir / part2_output_name(result)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(result.model_dump_json(indent=2))
+    save(config, part2_output_name(result), result)
     return result
 
 
@@ -86,20 +83,22 @@ def run_part3(config: Config, pdf_path: Path, query: str) -> Part3Result:
     """Answer `query` about `pdf_path` with the supervisor and its Revenue and Expenditure agents,
     and write the answer and trace to `outputs/part3_fy<year>_<query-slug>.json`."""
     llm = get_llm(config.llm)
-    ctx = prepare(config, pdf_path)
+    doc = prepare(config, pdf_path)
 
-    state = build_graph(llm, ctx.doc).invoke({"query": query, "fiscal_year": ctx.fiscal_year, "steps": []})
+    state = build_graph(llm, doc).invoke({"query": query, "fiscal_year": doc.fiscal_year, "steps": []})
     result = Part3Result(
-        source_pdf=ctx.doc.source,
-        fiscal_year=ctx.fiscal_year,
+        source_pdf=doc.source,
+        fiscal_year=doc.fiscal_year,
         query=query,
         steps=state["steps"],
         final_answer=state["final_answer"],
     )
-    out = config.output_dir / part3_output_name(result)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(result.model_dump_json(indent=2))
+    save(config, part3_output_name(result), result)
     return result
+
+
+def part1_output_name(result: Part1Result) -> str:
+    return f"part1_fy{result.fiscal_year}.json"
 
 
 def part2_output_name(result: Part2Result) -> str:
@@ -108,6 +107,7 @@ def part2_output_name(result: Part2Result) -> str:
 
 
 def part3_output_name(result: Part3Result) -> str:
+    """One file per fiscal year and query, named after the query's first 8 words."""
     slug = "-".join(re.findall(r"[a-z0-9]+", result.query.lower())[:8])
     return f"part3_fy{result.fiscal_year}_{slug}.json"
 
@@ -117,23 +117,25 @@ def part3_output_name(result: Part3Result) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _source(prov: Provenance) -> str:
+    """A provenance's block title and pages, e.g. "Table 2.1 Budget for FY2024 p.16"."""
+    return f"{prov.block_title} p.{','.join(map(str, prov.pages))}" if prov.block_title else "-"
+
+
 def _print_part1(result: Part1Result, config: Config) -> None:
     print(f"\n{result.source_pdf} (FY{result.fiscal_year})\n")
     for name, prov in result.provenance.items():
-        value = getattr(result, name)
-        where = f"{prov.block_title} p.{','.join(map(str, prov.pages))}" if prov.block_title else "-"
-        print(f"{name}: {value}\n     source:   {where}\n     evidence: {prov.evidence}")
+        print(f"{name}: {getattr(result, name)}\n     source:   {_source(prov)}\n     evidence: {prov.evidence}")
         if prov.error:
             print(f"     error:    {prov.error}")
-    print(f"\nSaved to {config.output_dir / f'part1_fy{result.fiscal_year}.json'}")
+    print(f"\nSaved to {config.output_dir / part1_output_name(result)}")
 
 
 def _print_part2(result: Part2Result, config: Config) -> None:
     print(f"\n{result.source_pdf} (FY{result.fiscal_year}), reference date {result.reference_date}\n")
     print("Found:")
     for name, prov in result.provenance.items():
-        where = f"{prov.block_title} p.{','.join(map(str, prov.pages))}" if prov.block_title else "-"
-        print(f"  {name}: {prov.evidence}\n     source: {where}")
+        print(f"  {name}: {prov.evidence}\n     source: {_source(prov)}")
         if prov.error:
             print(f"     error:  {prov.error}")
     print("\nTool calls:")
@@ -156,7 +158,7 @@ def _print_part3(result: Part3Result, config: Config) -> None:
                 print(f"    {call.tool}({call.args}) -> {output[:120]}{'...' if len(output) > 120 else ''}")
             print(f"    report: {step.report.answer}")
             for f in step.report.figures:
-                print(f"      - {f.label}: {f.value_bn:g} bn ({', '.join(f.block_ids)}; p. {', '.join(map(str, f.pages))})")
+                print(f"      - {f.describe()}")
             if step.report.gaps:
                 print(f"    gaps: {step.report.gaps}")
         else:
@@ -168,7 +170,8 @@ def _print_part3(result: Part3Result, config: Config) -> None:
     print(f"\nSaved to {config.output_dir / part3_output_name(result)}")
 
 
-def cli(argv: list[str] | None = None) -> int:
+def cli() -> int:
+    """Run the part named on the command line and print its result. Returns the exit code."""
     parser = argparse.ArgumentParser(prog="htx-ai-technical")
     parser.add_argument("part", choices=["part1", "part2", "part3"], help="which part to run")
     parser.add_argument("--pdf", required=True, type=Path, help="path to the PDF to extract from")
@@ -177,13 +180,13 @@ def cli(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--query", help="question for the Part 3 supervisor; required for part3")
 
-    args = parser.parse_args(argv)
+    args = parser.parse_args()
     if args.part == "part2" and args.reference_date is None:
         parser.error("--reference-date is required for part2")
     if args.part == "part3" and not args.query:
         parser.error("--query is required for part3")
     logging.basicConfig(format="%(levelname)s %(name)s: %(message)s")
-    logging.getLogger("htx_ai_technical").setLevel(logging.INFO)
+    logging.getLogger("htx_ai_technical").setLevel(logging.INFO)  # shows the LLM call logs
     try:
         config = load_config()
         if args.part == "part1":
@@ -192,7 +195,7 @@ def cli(argv: list[str] | None = None) -> int:
         elif args.part == "part2":
             result = run_part2(config, args.pdf, args.reference_date)
             _print_part2(result, config)
-        elif args.part == "part3":
+        else:
             result = run_part3(config, args.pdf, args.query)
             _print_part3(result, config)
     except (ConfigError, FileNotFoundError) as exc:

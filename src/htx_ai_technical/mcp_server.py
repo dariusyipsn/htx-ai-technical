@@ -15,7 +15,8 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("dates", log_level="WARNING")  # its INFO logs would interleave with the CLI's output
 
-# Two different defaults: a component the text leaves out comes back different in each parse.
+# dateutil fills a day, month or year the text leaves out from a default date. Parsing with two
+# defaults that differ in every component shows whether anything was filled in: the results differ.
 _DEFAULTS = (datetime(1, 1, 1), datetime(2, 2, 2))
 
 

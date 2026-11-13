@@ -25,13 +25,16 @@ class Block(BaseModel):
     header_rows: int = Field(default=0, description="How many leading grid rows are column headers.")
 
     def describe(self) -> str:
+        """One line for prompts and tool output, e.g. "[t026] TABLE: 02 ... > Table 2.4 ... (pages 20)"."""
         path = " > ".join([*self.section_path, self.title])
         pages = ", ".join(map(str, self.pages))
         return f"[{self.id}] {self.type.upper()}: {path} (pages {pages})"
 
 
 class ParsedDocument(BaseModel):
-    source: str
+    """A PDF as blocks in reading order. This is what the parse cache stores."""
+
+    source: str  # the PDF's file name
     fiscal_year: int | None
     blocks: list[Block]
 
@@ -70,6 +73,8 @@ class TextList(BaseModel):
 
 
 class Provenance(BaseModel):
+    """Where a field's answer came from, or `error` saying why it has none."""
+
     block_id: str | None = None
     block_title: str | None = None
     pages: list[int] = Field(default_factory=list)
@@ -119,6 +124,8 @@ class Classifications(BaseModel):
 
 
 class DateStatus(BaseModel):
+    """A date in the Part 2 result: step 1's `NormalisedDate` plus step 2's status and reasoning."""
+
     id: str
     original_text: str
     normalized_date: str
@@ -127,7 +134,7 @@ class DateStatus(BaseModel):
 
 
 class ToolCallRecord(BaseModel):
-    """One MCP tool call made by the LLM, for the trace."""
+    """One tool call made by an agent, for the trace."""
 
     tool: str
     args: dict
@@ -153,7 +160,8 @@ AgentName = Literal["revenue", "expenditure"]
 
 
 class Route(BaseModel):
-    """The supervisor's decision. `reasoning` comes before `next` so it reasons before it routes."""
+    """The supervisor's decision, as the LLM returns it. `reasoning` comes before `next` so it
+    reasons before it routes."""
 
     reasoning: str = Field(
         description="Two or three sentences: what the query still needs, given the reports so far, "
@@ -177,14 +185,23 @@ class Figure(BaseModel):
     block_ids: list[str] = Field(description="Id(s) of the block(s) it was read from, e.g. ['t026'].")
     pages: list[int] = Field(description="Page(s) of those blocks.")
 
+    def describe(self) -> str:
+        """One line for prompts and the CLI, e.g. "Total top-ups: 20.352 bn (t026; p. 20)"."""
+        return f"{self.label}: {self.value_bn:g} bn ({', '.join(self.block_ids)}; p. {', '.join(map(str, self.pages))})"
+
 
 class AgentReport(BaseModel):
+    """What a Revenue or Expenditure agent returns for its task."""
+
     answer: str = Field(description="A concise answer to the task, citing pages like (p. 16).")
     figures: list[Figure] = Field(description="Every number the answer relies on.")
     gaps: str = Field(description="What the task asked for that the document doesn't say. Empty if none.")
 
 
 class SupervisorDecision(BaseModel):
+    """A trace step: a `Route` the supervisor made. `kind` tells the two step types apart in the
+    saved JSON."""
+
     kind: Literal["decision"] = "decision"
     reasoning: str
     next: Literal["revenue", "expenditure", "finish"]
@@ -192,6 +209,8 @@ class SupervisorDecision(BaseModel):
 
 
 class WorkerRun(BaseModel):
+    """A trace step: one agent run, with its task, tool calls and report."""
+
     kind: Literal["worker"] = "worker"
     agent: AgentName
     task: str

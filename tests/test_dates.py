@@ -5,10 +5,10 @@ from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
-from htx_ai_technical.dates import MAX_MODEL_CALLS, date_provenance, run_agent, tool_trace
+from htx_ai_technical.dates import MAX_MODEL_CALLS, date_provenance, extract_dates, tool_trace
 from htx_ai_technical.extraction import locate_block
 from htx_ai_technical.fields import DistributionDate, EstateDutyDate
-from htx_ai_technical.schemas import Block, NormalisedDate, NormalisedDates, ParsedDocument
+from htx_ai_technical.schemas import Block, NormalisedDate, ParsedDocument
 
 COVER = Block(id="s0", type="section", title="(cover)", pages=[1], text="")
 DOC = ParsedDocument(
@@ -67,7 +67,7 @@ class LoopingModel(GenericFakeChatModel):
         return self
 
 
-def test_run_agent_stops_a_model_that_keeps_calling_tools():
+def test_extract_dates_stops_a_model_that_keeps_calling_tools():
     @tool
     def normalize_date(date_text: str) -> str:
         """Normalise a date."""
@@ -80,9 +80,7 @@ def test_run_agent_stops_a_model_that_keeps_calling_tools():
             for i in calls
         )
     )
-    answer, trace = asyncio.run(
-        run_agent(llm, [normalize_date], "date_extraction", NormalisedDates, fy="2030", definitions="", context="")
-    )
+    answer, trace = asyncio.run(extract_dates(llm, [normalize_date], 2030, definitions="", context=""))
     assert answer is None
     assert len(trace) == MAX_MODEL_CALLS  # every call is kept for the output's tool_calls
     assert next(calls) == MAX_MODEL_CALLS

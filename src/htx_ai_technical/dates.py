@@ -38,11 +38,13 @@ from .schemas import (
     ToolCallRecord,
 )
 
-# A normal run takes 2 model calls (call the tool for every date, then answer); this leaves room
-# for one retry per date. A model that keeps calling tools would otherwise loop for thousands of
-# steps (LangGraph's default recursion limit); at the cap the agent stops without an answer.
+# Model calls allowed in one extraction agent run. A normal run takes 2 (call the tool for every
+# date, then answer), so this leaves room for retries. Without the cap, a model that keeps calling
+# tools would loop until `create_agent`'s recursion limit (9,999 graph steps). At the cap the
+# agent stops without an answer.
 MAX_MODEL_CALLS = 6
 
+# The local MCP server (`mcp_server.py`), started as a subprocess that talks over stdio.
 MCP_SERVERS = {
     "dates": {"command": sys.executable, "args": ["-m", "htx_ai_technical.mcp_server"], "transport": "stdio"},
 }
@@ -50,6 +52,9 @@ MCP_SERVERS = {
 
 @dataclass
 class DateResults:
+    """What Part 2 found: step 1's normalised dates and tool calls, step 2's statuses, and the
+    reason if step 1 gave no answer."""
+
     normalized: list[NormalisedDate] = field(default_factory=list)
     dates: list[DateStatus] = field(default_factory=list)
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
@@ -68,20 +73,21 @@ def tool_trace(messages: list[BaseMessage], tools: list[BaseTool]) -> list[ToolC
     ]
 
 
-async def run_agent(
-    llm: BaseChatModel, tools: list[BaseTool], prompt_name: str, schema: type[BaseModel], **variables: str
-) -> tuple[BaseModel | None, list[ToolCallRecord]]:
-    """Run a tool-calling agent on `prompts/<prompt_name>.yaml` and return its structured answer
+async def extract_dates(
+    llm: BaseChatModel, tools: list[BaseTool], fiscal_year: int, definitions: str, context: str
+) -> tuple[NormalisedDates | None, list[ToolCallRecord]]:
+    """Step 1: run the tool-calling agent on `prompts/date_extraction.yaml`. Returns its answer
     (None if it reached `MAX_MODEL_CALLS` without one) and the tool calls it made."""
     agent = create_agent(
         llm,
         tools=tools,
-        response_format=schema,
+        response_format=NormalisedDates,
         middleware=[ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end")],
     )
+    messages = chat_prompt("date_extraction").format_messages(fy=fiscal_year, definitions=definitions, context=context)
     result = await agent.ainvoke(
-        {"messages": chat_prompt(prompt_name).format_messages(**variables)},
-        config={"metadata": {"step": prompt_name}},  # shown in the LLM call log
+        {"messages": messages},
+        config={"metadata": {"step": "date_extraction"}},  # shown in the LLM call log
     )
     return result.get("structured_response"), tool_trace(result["messages"], tools)
 
@@ -89,19 +95,16 @@ async def run_agent(
 async def find_and_classify_async(
     llm: BaseChatModel, blocks: dict[type[BaseModel], Block], fiscal_year: int, reference_date: date
 ) -> DateResults:
+    """Both steps, for the field groups in `blocks` (`{group: its located block}`)."""
     results = DateResults()
-    client = MultiServerMCPClient(MCP_SERVERS)
-    async with client.session("dates") as session:
-        normalised, calls = await run_agent(
+    async with MultiServerMCPClient(MCP_SERVERS).session("dates") as session:
+        normalised, results.tool_calls = await extract_dates(
             llm,
             await load_mcp_tools(session),
-            "date_extraction",
-            NormalisedDates,
-            fy=str(fiscal_year),
+            fiscal_year,
             definitions="\n".join(definitions(g) for g in blocks),
             context="\n\n".join(render_block(b) for b in blocks.values()),
         )
-    results.tool_calls = calls
     if normalised is None:
         results.error = (
             f"The date extraction agent stopped after {MAX_MODEL_CALLS} model calls without returning "

@@ -7,7 +7,9 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
+# Name of the config file. Its location is fixed: the repo root (see `find_repo_root`).
 CONFIG_FILE = "config.yaml"
+
 
 class ConfigError(ValueError):
     """Raised when config.yaml is missing or invalid. Messages name the field to fix."""
@@ -30,9 +32,10 @@ class PathsConfig(BaseModel):
 class Config(BaseModel):
     llm: LLMConfig
     paths: PathsConfig = Field(default_factory=PathsConfig)
-    root: Path = Field(default_factory=Path.cwd, exclude=True)
+    root: Path = Field(exclude=True)  # the repo root, set by `load_config`; not a config.yaml key
 
     def resolve(self, path: str | Path) -> Path:
+        """An absolute path as is; a relative one resolved against the repo root."""
         path = Path(path).expanduser()
         return path if path.is_absolute() else (self.root / path).resolve()
 
@@ -46,19 +49,19 @@ class Config(BaseModel):
 
 
 def find_repo_root() -> Path:
-    """Walk up from the cwd to the folder holding pyproject.toml and config.yaml.
+    """Walk up from the cwd to the folder holding pyproject.toml and the config file.
 
     Falls back to the package's own repo when the cwd is outside it.
     """
     for candidate in [Path.cwd(), Path(__file__).resolve()]:
         for parent in [candidate, *candidate.parents]:
-            if (parent / "pyproject.toml").is_file() and (parent / "config.yaml").is_file():
+            if (parent / "pyproject.toml").is_file() and (parent / CONFIG_FILE).is_file():
                 return parent
     return Path.cwd()
 
 
 def load_config() -> Config:
-    """Load `config.yaml` from the repo root. Its location is fixed."""
+    """Load `config.yaml` from the repo root."""
     config_path = find_repo_root() / CONFIG_FILE
     if not config_path.is_file():
         raise ConfigError(f"Config file not found: {config_path}")

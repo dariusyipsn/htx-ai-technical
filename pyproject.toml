@@ -1,7 +1,7 @@
 [project]
 name = "htx-ai-technical"
 version = "0.1.0"
-description = "Add your description here"
+description = "Extracts structured data from MOF Analysis of Revenue and Expenditure PDFs and reasons over it with LLMs"
 readme = "README.md"
 authors = [
     { name = "Darius Yip", email = "darius.yip@simplifynext.com" }

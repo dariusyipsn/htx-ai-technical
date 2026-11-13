@@ -17,11 +17,13 @@ from pydantic import BaseModel
 from htx_ai_technical.config import Config, load_config
 from htx_ai_technical.main import run_part1
 
-CASES_FILE = "evals/part1_cases.json"
-TOLERANCE = 0.005
+CASES_FILE = "evals/part1_cases.json"  # relative to the repo root
+TOLERANCE = 0.005  # a number passes within this of the expected value: half a unit in the 2nd decimal place
 
 
 class FieldScore(BaseModel):
+    """One expected value compared with what the run returned."""
+
     field: str
     expected: Any
     actual: Any
@@ -29,6 +31,8 @@ class FieldScore(BaseModel):
 
 
 class CaseScore(BaseModel):
+    """One case's field scores. `pdf_path` names the case in the report."""
+
     pdf_path: str
     fields: list[FieldScore] = []
     error: str | None = None  # the run itself failed; every field counts as failed
@@ -39,6 +43,7 @@ class CaseScore(BaseModel):
 
 
 def matches(expected: Any, actual: Any) -> bool:
+    """Lists match as sets of names, numbers within `TOLERANCE`, anything else (e.g. null) exactly."""
     if isinstance(expected, list):
         return isinstance(actual, list) and {_key(x) for x in expected} == {_key(x) for x in actual}
     if isinstance(expected, (int, float)) and actual is not None:
@@ -47,6 +52,7 @@ def matches(expected: Any, actual: Any) -> bool:
 
 
 def _key(text: str) -> str:
+    """A name with case and extra spaces ignored."""
     return " ".join(text.split()).casefold()
 
 
@@ -57,24 +63,27 @@ def run_part1_eval(config: Config) -> list[CaseScore]:
     for case in cases:
         score = CaseScore(pdf_path=case["pdf_path"])
         try:
-            result = run_part1(config, config.resolve(case["pdf_path"]))
+            actual = run_part1(config, config.resolve(case["pdf_path"])).model_dump()
         except Exception as exc:
             score.error = f"{type(exc).__name__}: {exc}"
-            score.fields = [FieldScore(field=f, expected=v, actual=None, passed=False) for f, v in case["expected"].items()]
-        else:
-            score.fields = [
-                FieldScore(field=f, expected=v, actual=getattr(result, f), passed=matches(v, getattr(result, f)))
-                for f, v in case["expected"].items()
-            ]
+            actual = {}
+        score.fields = [
+            FieldScore(field=f, expected=v, actual=actual.get(f), passed=f in actual and matches(v, actual[f]))
+            for f, v in case["expected"].items()
+        ]
         scores.append(score)
-
-    out = config.output_dir / "evals" / "part1_eval.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps([s.model_dump() for s in scores], indent=2))
+    save_report(config, "part1_eval.json", scores)
     return scores
 
 
-def _print_report(scores: list[CaseScore]) -> None:
+def save_report(config: Config, filename: str, scores: list[CaseScore]) -> None:
+    """Write the scores to `<output_dir>/evals/<filename>`."""
+    out = config.output_dir / "evals" / filename
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps([s.model_dump() for s in scores], indent=2))
+
+
+def print_report(scores: list[CaseScore]) -> None:
     for score in scores:
         print(f"\n{score.pdf_path}: {score.passed}/{len(score.fields)}")
         if score.error:
@@ -88,4 +97,4 @@ def _print_report(scores: list[CaseScore]) -> None:
 if __name__ == "__main__":
     logging.basicConfig(format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("htx_ai_technical").setLevel(logging.INFO)
-    _print_report(run_part1_eval(load_config()))
+    print_report(run_part1_eval(load_config()))

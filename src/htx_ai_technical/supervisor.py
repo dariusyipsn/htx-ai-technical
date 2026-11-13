@@ -37,13 +37,18 @@ from .schemas import AgentName, AgentReport, ParsedDocument, Route, SupervisorDe
 
 logger = logging.getLogger(__name__)
 
-MAX_AGENT_CALLS = 4  # then the supervisor must finish
-# Model calls per agent run (search, read, sum, answer, with room to spare). An agent that hits it
-# fails with ModelCallLimitExceededError, which is recorded under its report's gaps.
+# Agent runs allowed per query. After that the supervisor finishes without asking the LLM, so a
+# confused run can't loop.
+MAX_AGENT_CALLS = 4
+# Model calls allowed in one agent run. A normal run takes about 4 (search, read, sum, answer). An
+# agent that hits the cap fails with ModelCallLimitExceededError, which is recorded under its
+# report's gaps.
 MAX_AGENT_MODEL_CALLS = 8
 
 
 class State(TypedDict):
+    """The graph's state. Each node returns new `steps`, which `operator.add` appends to the list."""
+
     query: str
     fiscal_year: int
     steps: Annotated[list[SupervisorDecision | WorkerRun], operator.add]
@@ -86,10 +91,7 @@ def render_reports(steps: list[SupervisorDecision | WorkerRun]) -> str:
         return "(none yet)"
     parts = []
     for i, run in enumerate(runs, 1):
-        figures = "\n".join(
-            f"  - {f.label}: {f.value_bn:g} bn ({', '.join(f.block_ids)}; p. {', '.join(map(str, f.pages))})"
-            for f in run.report.figures
-        )
+        figures = "\n".join(f"  - {f.describe()}" for f in run.report.figures)
         parts.append(
             f"Report {i}, from {run.agent}\nTask: {run.task}\nAnswer: {run.report.answer}\n"
             f"Figures:\n{figures or '  (none)'}\nGaps: {run.report.gaps or '(none)'}"
@@ -104,6 +106,7 @@ def next_node(state: State) -> str:
 
 
 def build_graph(llm: BaseChatModel, doc: ParsedDocument) -> CompiledStateGraph:
+    """The compiled graph in the module docstring, with both agents reading `doc` through the tools."""
     tools = [*document_tools(doc), sum_values]
     route = chat_prompt("supervisor") | llm.with_structured_output(Route)
 
@@ -128,6 +131,7 @@ def build_graph(llm: BaseChatModel, doc: ParsedDocument) -> CompiledStateGraph:
         return {"steps": [decision]}
 
     def worker(name: AgentName):
+        """The graph node for one agent: runs it on the supervisor's latest task."""
         agent = create_agent(
             llm,
             tools=tools,
@@ -140,7 +144,7 @@ def build_graph(llm: BaseChatModel, doc: ParsedDocument) -> CompiledStateGraph:
             try:
                 result = agent.invoke(
                     {"messages": chat_prompt(f"{name}_agent").format_messages(fy=state["fiscal_year"], task=task)},
-                    config={"metadata": {"node": name}},
+                    config={"metadata": {"node": name}},  # shown in the LLM call log
                 )
                 report, calls = result["structured_response"], tool_trace(result["messages"], tools)
             except Exception as exc:  # recorded in the trace for the supervisor to work around
@@ -159,7 +163,7 @@ def build_graph(llm: BaseChatModel, doc: ParsedDocument) -> CompiledStateGraph:
                 "finish_reason": state["steps"][-1].reasoning,
                 "reports": render_reports(state["steps"]),
             },
-            config={"metadata": {"node": "synthesize"}},
+            config={"metadata": {"node": "synthesize"}},  # shown in the LLM call log
         )
         return {"final_answer": answer.text}
 

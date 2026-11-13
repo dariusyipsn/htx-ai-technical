@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Literal
 
 from .schemas import Block, ParsedDocument
 
 BlockType = Literal["section", "table"]
 
+# The fiscal-year placeholder in an anchor pattern: "{fy}", "{fy-1}", "{fy+1}", ...
 _PLACEHOLDER = re.compile(r"\{fy([+-]\d+)?\}")
 
 
-def anchor_matcher(pattern: str, fiscal_year: int):
+def anchor_matcher(pattern: str, fiscal_year: int) -> Callable[[str], bool]:
     """Compile an anchor pattern into a predicate on titles (case-insensitive, matched anywhere).
 
     `*` matches any text. `{fy}` is the document's fiscal year and `{fy-2}` that year minus
@@ -32,6 +34,7 @@ def locate(doc: ParsedDocument, pattern: str, block_type: BlockType) -> list[Blo
 
 
 def render_block(block: Block) -> str:
+    """A block as the LLM reads it: its description line, then its text."""
     return f"{block.describe()}\n{block.text}"
 
 
@@ -39,9 +42,11 @@ def render_block(block: Block) -> str:
 # Lookups for the Part 3 agents (wrapped as tools in `supervisor.py`)
 # ---------------------------------------------------------------------------
 
-_WORD = re.compile(r"[a-z0-9]+")
-_SENTENCE_OR_LINE = re.compile(r"\n|(?<=\.)\s+")
-SEARCH_RESULTS = 5
+_WORD = re.compile(r"[a-z0-9]+")  # a keyword, in lowercased text
+_SENTENCE_OR_LINE = re.compile(r"\n|(?<=\.)\s+")  # where to split a block's text into sentences or table rows
+SEARCH_RESULTS = 5  # how many blocks `search` returns
+TITLE_WEIGHT = 3  # a keyword in a block's title counts as this many in its text
+SNIPPET_CHARS = 300  # how much of the best-matching sentence or row `search` shows
 
 
 def list_blocks(doc: ParsedDocument) -> str:
@@ -63,15 +68,16 @@ def read_blocks(doc: ParsedDocument, block_ids: list[str]) -> str:
 def search(doc: ParsedDocument, keywords: str) -> str:
     """The `SEARCH_RESULTS` blocks that best match `keywords`, each with its best-matching sentence
     or table row. Blocks are ranked by how many of the keywords they contain, then by how often
-    (a keyword in the title counts three times)."""
+    (a keyword in the title counts `TITLE_WEIGHT` times)."""
     terms = set(_WORD.findall(keywords.lower()))
     if not terms:
         raise ValueError("Give at least one keyword.")
 
     def score(title: str, text: str) -> tuple[int, int]:
+        """(distinct keywords found, weighted number of occurrences)."""
         title_words, text_words = _WORD.findall(title.lower()), _WORD.findall(text.lower())
         found = terms & {*title_words, *text_words}
-        return len(found), sum(3 * (w in terms) for w in title_words) + sum(w in terms for w in text_words)
+        return len(found), sum(TITLE_WEIGHT * (w in terms) for w in title_words) + sum(w in terms for w in text_words)
 
     ranked = sorted(doc.blocks, key=lambda b: score(b.title, b.text), reverse=True)
     lines = []
@@ -79,5 +85,5 @@ def search(doc: ParsedDocument, keywords: str) -> str:
         if score(b.title, b.text)[0] == 0:
             break
         best = max(_SENTENCE_OR_LINE.split(b.text), key=lambda part: score("", part))
-        lines.append(f"{b.describe()}\n    {best[:300]}")
+        lines.append(f"{b.describe()}\n    {best[:SNIPPET_CHARS]}")
     return "\n".join(lines) or f"No block mentions {keywords!r}."

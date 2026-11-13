@@ -13,15 +13,16 @@ import json
 import logging
 from datetime import date
 
-from evals.part1_eval import CaseScore, FieldScore, _print_report, matches
+from evals.part1_eval import CaseScore, FieldScore, matches, print_report, save_report
 from htx_ai_technical.config import Config, load_config
 from htx_ai_technical.main import run_part2
 from htx_ai_technical.schemas import Part2Result
 
-CASES_FILE = "evals/part2_cases.json"
+CASES_FILE = "evals/part2_cases.json"  # relative to the repo root
 
 
 def actual_fields(result: Part2Result) -> dict:
+    """The parts of a result that the cases score."""
     return {
         "fiscal_year": result.fiscal_year,
         "normalized_dates": result.normalized_dates,
@@ -46,14 +47,11 @@ def run_part2_eval(config: Config) -> list[CaseScore]:
             for f, v in case["expected"].items()
         ]
         scores.append(score)
-
-    out = config.output_dir / "evals" / "part2_eval.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps([s.model_dump() for s in scores], indent=2))
+    save_report(config, "part2_eval.json", scores)
     return scores
 
 
 if __name__ == "__main__":
     logging.basicConfig(format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("htx_ai_technical").setLevel(logging.INFO)
-    _print_report(run_part2_eval(load_config()))
+    print_report(run_part2_eval(load_config()))
